@@ -1,13 +1,11 @@
 from typing import AsyncIterator
-from sqlalchemy.orm import DeclarativeBase
+
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
-    AsyncAttrs,
     async_sessionmaker,
 )
-
-from lib import env_loader
+from .lib import env_loader
 
 # defining engine url
 
@@ -30,9 +28,3 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.close()
-
-    # create a base class for creating models with asynchronous attributes
-
-
-class Base(DeclarativeBase, AsyncAttrs):
-    pass
