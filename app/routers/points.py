@@ -1,8 +1,8 @@
-# app/api/endpoints/points.py
 from typing import List, Optional
+import traceback
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 from geoalchemy2.functions import (
     ST_AsGeoJSON,
     ST_GeomFromText,
@@ -16,37 +16,43 @@ import json
 from app.database import get_db
 from app import models, schemas
 
-router = APIRouter()
+router = APIRouter(prefix="/api/points")
 
 
 @router.post("/", response_model=dict, status_code=201)
-def create_point(point: schemas.PointCreate, db: Session = Depends(get_db)):
+async def create_point(point: schemas.PointCreate, db: AsyncSession = Depends(get_db)):
     """Create a new spatial point"""
     try:
-        lon, lat = point.coordinates
-        wkt_point = f"POINT({lon} {lat})"
-
-        # Create database record
+        lon, lat = point.coordinates  # Get the latitude and longitude from Body
+        wkt_point = f"POINT({lon} {lat})"  # Pre-formatting for saving to database
         db_point = models.SpatialPoint(
             name=point.name,
             description=point.description,
             attributes=point.attributes,
-            geom=WKTElement(wkt_point, srid=4326),
+            geom=WKTElement(
+                wkt_point, srid=4326
+            ),  # Converting string to GeoAlchemy Point Class for saving to database
         )
 
         db.add(db_point)
-        db.commit()
-        db.refresh(db_point)
+        await db.commit()
+        await db.refresh(db_point)
 
         return db_point.to_geojson()
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create point: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
+        )
 
 
 @router.post("/batch", response_model=schemas.FeatureCollection, status_code=201)
-def create_points_batch(
-    points_data: schemas.PointBatchCreate, db: Session = Depends(get_db)
+async def create_points_batch(
+    points_data: schemas.PointBatchCreate, db: AsyncSession = Depends(get_db)
 ):
     """Create multiple spatial points in a batch"""
     try:
@@ -64,59 +70,84 @@ def create_points_batch(
             )
 
             db.add(db_point)
-            db.flush()  # Flush to get IDs without committing
+            await db.flush()
             features.append(db_point.to_geojson())
 
-        db.commit()
+        await db.commit()
 
         return {"type": "FeatureCollection", "features": features}
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(
-            status_code=500, detail=f"Failed to create batch points: {str(e)}"
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
         )
 
 
 @router.get("/", response_model=schemas.FeatureCollection)
-def get_all_points(
+async def get_all_points(
     skip: int = 0,
     limit: int = 100,
     name: Optional[str] = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get all spatial points with optional filtering by name"""
-    query = db.query(models.SpatialPoint)
+    try:
+        """Get all spatial points with optional filtering by name"""
+        query = select(models.SpatialPoint)
 
-    if name:
-        query = query.filter(models.SpatialPoint.name.ilike(f"%{name}%"))
+        if name:
+            query = query.where(models.SpatialPoint.name.ilike(f"%{name}%"))
 
-    points = query.offset(skip).limit(limit).all()
-    features = [point.to_geojson() for point in points]
+        query = query.offset(skip).limit(limit)
 
-    return {"type": "FeatureCollection", "features": features}
+        result = await db.execute(query)
+        points = result.scalars().all()
+        if not points:
+            return {"type": "FeatureCollection", "features": []}
+        features = [point.to_geojson() for point in points]
+        return {"type": "FeatureCollection", "features": features}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
+        )
 
 
 @router.get("/{point_id}", response_model=dict)
-def get_point(point_id: int, db: Session = Depends(get_db)):
+async def get_point(point_id: int, db: AsyncSession = Depends(get_db)):
     """Get a specific spatial point by ID"""
-    point = (
-        db.query(models.SpatialPoint).filter(models.SpatialPoint.id == point_id).first()
-    )
+    try:
+        query = select(models.SpatialPoint).where(models.SpatialPoint.id == point_id)
+        result = await db.execute(query)
+        point = result.scalar_one_or_none()
+        if not point:
+            raise HTTPException(status_code=404, detail="Point not found")
 
-    if not point:
-        raise HTTPException(status_code=404, detail="Point not found")
-
-    return point.to_geojson()
+        return point.to_geojson()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
+        )
 
 
 @router.put("/{point_id}", response_model=dict)
-def update_point(
-    point_id: int, point_update: schemas.PointUpdate, db: Session = Depends(get_db)
+async def update_point(
+    point_id: int, point_update: schemas.PointUpdate, db: AsyncSession = Depends(get_db)
 ):
     """Update a spatial point"""
-    db_point = (
-        db.query(models.SpatialPoint).filter(models.SpatialPoint.id == point_id).first()
-    )
+    query = select(models.SpatialPoint).where(models.SpatialPoint.id == point_id)
+    result = await db.execute(query)
+    db_point = result.scalar_one_or_none()
 
     if not db_point:
         raise HTTPException(status_code=404, detail="Point not found")
@@ -136,75 +167,103 @@ def update_point(
         db_point.geom = WKTElement(wkt_point, srid=4326)
 
     try:
-        db.commit()
-        db.refresh(db_point)
+        await db.commit()
+        await db.refresh(db_point)
         return db_point.to_geojson()
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update point: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
+        )
 
 
 @router.delete("/{point_id}", status_code=204)
-def delete_point(point_id: int, db: Session = Depends(get_db)):
+async def delete_point(point_id: int, db: AsyncSession = Depends(get_db)):
     """Delete a spatial point"""
-    db_point = (
-        db.query(models.SpatialPoint).filter(models.SpatialPoint.id == point_id).first()
-    )
-
-    if not db_point:
-        raise HTTPException(status_code=404, detail="Point not found")
-
     try:
-        db.delete(db_point)
-        db.commit()
-        return {"status": "success"}
+        query = select(models.SpatialPoint).where(models.SpatialPoint.id == point_id)
+        result = await db.execute(query)
+        db_point = result.scalar_one_or_none()
+
+        if not db_point:
+            raise HTTPException(status_code=404, detail="Point not found")
+
+        try:
+            await db.delete(db_point)
+            await db.commit()
+            return {"status": "success"}
+        except Exception as e:
+            await db.rollback()
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete point: {str(e)}"
+            )
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete point: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
+        )
 
 
 @router.get("/search/radius", response_model=schemas.FeatureCollection)
-def search_points_by_radius(
+async def search_points_by_radius(
     lon: float = Query(..., description="Longitude of the center point"),
     lat: float = Query(..., description="Latitude of the center point"),
     radius: float = Query(..., description="Search radius in meters"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Search for points within a specified radius of a location"""
     try:
-        # Using geography type for accurate distance calculation
+        # Create WKT point with SRID
         point_wkt = f"POINT({lon} {lat})"
         center_point = WKTElement(point_wkt, srid=4326)
 
-        points = (
-            db.query(models.SpatialPoint)
-            .filter(
-                func.ST_DWithin(
-                    models.SpatialPoint.geom.cast("geography"),
-                    center_point.cast("geography"),
-                    radius,
-                )
+        # Build the select query with ST_DWithin filter
+        query = select(models.SpatialPoint).where(
+            func.ST_DWithin(
+                models.SpatialPoint.geom.cast("geography"),
+                center_point.cast("geography"),
+                radius,
             )
-            .all()
         )
+
+        # Execute the query asynchronously
+        result = await db.execute(query)
+        points = result.scalars().all()
 
         features = []
         for point in points:
             feature = point.to_geojson()
-            # Calculate distance from center point
-            distance = db.scalar(
+
+            # Calculate distance for each point asynchronously
+            distance_query = select(
                 func.ST_Distance(
-                    models.SpatialPoint.geom.cast("geography"),
+                    point.geom.cast("geography"),
                     center_point.cast("geography"),
-                ).label("distance")
+                )
             )
+            distance_result = await db.execute(distance_query)
+            distance = distance_result.scalar_one_or_none()
+
             feature["properties"]["distance"] = (
                 float(distance) if distance is not None else None
             )
             features.append(feature)
 
         return {"type": "FeatureCollection", "features": features}
+
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to search points by radius: {str(e)}"
+            status_code=500,
+            detail={
+                "msg": f"Failed to create point: {str(e)}",
+                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
+            },
         )
