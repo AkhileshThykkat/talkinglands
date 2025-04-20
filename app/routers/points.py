@@ -1,8 +1,10 @@
 from typing import List, Optional
 import traceback
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+# from geoalchemy2 import Geography
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select
 from geoalchemy2.functions import (
     ST_AsGeoJSON,
     ST_GeomFromText,
@@ -10,13 +12,22 @@ from geoalchemy2.functions import (
     ST_MakePoint,
     ST_DWithin,
 )
-from geoalchemy2.elements import WKTElement
+
+# from geoalchemy2.elements import WKTElement
 import json
 
-from app.database import get_db
-from app import models, schemas
+# from sqlalchemy import select, func
+from geoalchemy2 import WKTElement
+from geoalchemy2.types import Geography
 
-router = APIRouter(prefix="/api/points")
+# from fastapi import HTTPException
+# import traceback
+
+from database import get_db
+import models
+import schemas
+
+router = APIRouter(prefix="/api/points", tags=["Points"])
 
 
 @router.post("/", response_model=dict, status_code=201)
@@ -109,6 +120,8 @@ async def get_all_points(
             return {"type": "FeatureCollection", "features": []}
         features = [point.to_geojson() for point in points]
         return {"type": "FeatureCollection", "features": features}
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -130,6 +143,8 @@ async def get_point(point_id: int, db: AsyncSession = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Point not found")
 
         return point.to_geojson()
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -170,6 +185,8 @@ async def update_point(
         await db.commit()
         await db.refresh(db_point)
         return db_point.to_geojson()
+    except HTTPException as e:
+        raise e
     except Exception as e:
         await db.rollback()
         raise HTTPException(
@@ -201,65 +218,10 @@ async def delete_point(point_id: int, db: AsyncSession = Depends(get_db)):
             raise HTTPException(
                 status_code=500, detail=f"Failed to delete point: {str(e)}"
             )
+    except HTTPException as e:
+        raise e
     except Exception as e:
         await db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "msg": f"Failed to create point: {str(e)}",
-                "error_root": traceback.format_exc(),  ## Used only for debugging  can remove in production
-            },
-        )
-
-
-@router.get("/search/radius", response_model=schemas.FeatureCollection)
-async def search_points_by_radius(
-    lon: float = Query(..., description="Longitude of the center point"),
-    lat: float = Query(..., description="Latitude of the center point"),
-    radius: float = Query(..., description="Search radius in meters"),
-    db: AsyncSession = Depends(get_db),
-):
-    """Search for points within a specified radius of a location"""
-    try:
-        # Create WKT point with SRID
-        point_wkt = f"POINT({lon} {lat})"
-        center_point = WKTElement(point_wkt, srid=4326)
-
-        # Build the select query with ST_DWithin filter
-        query = select(models.SpatialPoint).where(
-            func.ST_DWithin(
-                models.SpatialPoint.geom.cast("geography"),
-                center_point.cast("geography"),
-                radius,
-            )
-        )
-
-        # Execute the query asynchronously
-        result = await db.execute(query)
-        points = result.scalars().all()
-
-        features = []
-        for point in points:
-            feature = point.to_geojson()
-
-            # Calculate distance for each point asynchronously
-            distance_query = select(
-                func.ST_Distance(
-                    point.geom.cast("geography"),
-                    center_point.cast("geography"),
-                )
-            )
-            distance_result = await db.execute(distance_query)
-            distance = distance_result.scalar_one_or_none()
-
-            feature["properties"]["distance"] = (
-                float(distance) if distance is not None else None
-            )
-            features.append(feature)
-
-        return {"type": "FeatureCollection", "features": features}
-
-    except Exception as e:
         raise HTTPException(
             status_code=500,
             detail={

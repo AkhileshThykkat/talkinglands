@@ -55,7 +55,7 @@ class PointInDB(PointBase):
     geometry: Dict[str, Any]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class PointBatchCreate(BaseModel):
@@ -132,7 +132,7 @@ class PolygonInDB(PolygonBase):
     geometry: Dict[str, Any]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class PolygonBatchCreate(BaseModel):

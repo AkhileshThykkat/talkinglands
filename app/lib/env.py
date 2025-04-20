@@ -23,6 +23,3 @@ class EnvVars:
 
 
 env_loader = EnvVars()
-
-
-print(env_loader.DB_URI)

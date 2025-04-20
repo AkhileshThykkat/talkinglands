@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
-from .lib import env_loader
+from lib import env_loader
 
 # defining engine url
 

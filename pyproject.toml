@@ -8,11 +8,17 @@ dependencies = [
     "asyncpg>=0.30.0",
     "fastapi>=0.115.12",
     "geoalchemy2>=0.17.1",
+    "httpx>=0.28.1",
     "orjson>=3.10.16",
     "pydantic>=2.11.3",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
     "python-dotenv>=1.1.0",
     "python-multipart>=0.0.20",
     "shapely>=2.1.0",
     "sqlalchemy>=2.0.40",
     "uvicorn>=0.34.2",
 ]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -7,10 +7,11 @@ from geoalchemy2.functions import ST_AsGeoJSON, ST_GeomFromText, ST_SetSRID
 from geoalchemy2.elements import WKTElement
 import json
 
-from app.database import get_db
-from app import models, schemas
+from database import get_db
+import models
+import schemas
 
-router = APIRouter("/api/polygons")
+router = APIRouter(prefix="/api/polygons", tags=["Polygons"])
 
 
 @router.post("/", response_model=dict, status_code=201)
@@ -102,11 +103,13 @@ async def get_all_polygons(
 
         result = await db.execute(query)
         polygons = result.scalars().all()
-
+        if not polygons:
+            raise HTTPException(status_code=404, detail="Polygons not found")
         features = [polygon.to_geojson() for polygon in polygons]
 
         return {"type": "FeatureCollection", "features": features}
-
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -132,6 +135,8 @@ async def get_polygon(polygon_id: int, db: AsyncSession = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Polygon not found")
 
         return polygon.to_geojson()
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -253,79 +258,5 @@ async def find_points_within_polygon(
             detail={
                 "msg": f"Failed to find points within polygon: {str(e)}",
                 "error_root": traceback.format_exc(),  # Remove in production
-            },
-        )
-
-
-@router.get("/intersect", response_model=schemas.FeatureCollection)
-async def find_intersecting_polygons(
-    coordinates: List[List[float]] = Query(
-        ..., description="List of coordinate pairs defining a polygon"
-    ),
-    db: AsyncSession = Depends(get_db),
-):
-    """Find all polygons that intersect with the provided polygon"""
-    try:
-        # Format coordinates as WKT polygon string
-        coord_strings = [f"{lon} {lat}" for lon, lat in coordinates]
-        if coord_strings[0] != coord_strings[-1]:
-            coord_strings.append(coord_strings[0])  # Close polygon ring
-
-        wkt_polygon = f'POLYGON(({", ".join(coord_strings)}))'
-        query_geom = WKTElement(wkt_polygon, srid=4326)
-
-        polygons_query = select(models.SpatialPolygon).where(
-            func.ST_Intersects(models.SpatialPolygon.geom, query_geom)
-        )
-        polygons_result = await db.execute(polygons_query)
-        polygons = polygons_result.scalars().all()
-
-        features = [polygon.to_geojson() for polygon in polygons]
-
-        return {"type": "FeatureCollection", "features": features}
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        # await db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "msg": f"Failed to find intersecting polygons: {str(e)}",
-                "error_root": traceback.format_exc(),
-            },
-        )
-
-
-@router.get("/contains", response_model=schemas.FeatureCollection)
-async def find_polygons_containing_point(
-    lon: float = Query(..., description="Longitude of the point"),
-    lat: float = Query(..., description="Latitude of the point"),
-    db: AsyncSession = Depends(get_db),
-):
-    """Find all polygons that contain the specified point"""
-    try:
-        point_wkt = f"POINT({lon} {lat})"
-        point_geom = WKTElement(point_wkt, srid=4326)
-
-        polygons_query = select(models.SpatialPolygon).where(
-            func.ST_Contains(models.SpatialPolygon.geom, point_geom)
-        )
-        polygons_result = await db.execute(polygons_query)
-        polygons = polygons_result.scalars().all()
-
-        features = [polygon.to_geojson() for polygon in polygons]
-
-        return {"type": "FeatureCollection", "features": features}
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        # await db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "msg": f"Failed to find polygons containing point: {str(e)}",
-                "error_root": traceback.format_exc(),
             },
         )
